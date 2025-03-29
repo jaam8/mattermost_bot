@@ -1,0 +1,13 @@
+app:
+  file: 'init.lua'
+
+iproto:
+  listen:
+    - uri: ${TARANTOOL_HOST}:${TARANTOOL_PORT}
+
+groups:
+  group001:
+    replicasets:
+      replicaset-001:
+        instances:
+          instance-001: {}

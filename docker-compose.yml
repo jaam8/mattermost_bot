@@ -1,0 +1,15 @@
+version: "3.9"
+
+services:
+  tarantool_container:
+    image: tarantool/tarantool:latest
+    container_name: tarantool
+    ports:
+      - ${TARANTOOL_PORT}:3301
+    environment:
+      TARANTOOL_USER: ${TARANTOOL_USER}
+      TARANTOOL_PASSWORD: ${TARANTOOL_PASSWORD}
+    volumes:
+      - ./tarantool:/opt/tarantool
+      - ./tarantool/tarantool_data:/var/lib/tarantool
+    command: tarantool /opt/tarantool/init.lua
