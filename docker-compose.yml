@@ -1,6 +1,16 @@
 version: "3.9"
 
 services:
+  mattermost_bot:
+    container_name: mattermost_bot
+    build: ./
+    env_file:
+      - .env
+    depends_on:
+      - tarantool_container
+    networks:
+      - bot-network
+
   tarantool_container:
     image: tarantool/tarantool:latest
     container_name: tarantool
@@ -12,4 +22,10 @@ services:
     volumes:
       - ./tarantool:/opt/tarantool
       - ./tarantool/tarantool_data:/var/lib/tarantool
+    networks:
+      - bot-network
     command: tarantool /opt/tarantool/init.lua
+
+networks:
+  bot-network:
+    driver: bridge
