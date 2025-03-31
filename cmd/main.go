@@ -41,7 +41,7 @@ func main() {
 
 	repo := repository.New(conn, log)
 	service := srv.New(repo, log)
-	handler := api.New(service, log, client, cfg.ChannelID)
+	handler := api.New(service, log, client)
 
 	client.SetToken(cfg.BotToken)
 	webSocketClient.Listen()

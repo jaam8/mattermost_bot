@@ -18,18 +18,16 @@ const (
 )
 
 type PollHandler struct {
-	s         *service.PollService
-	l         *zap.Logger
-	client    *model.Client4
-	channelID string
+	s      *service.PollService
+	l      *zap.Logger
+	client *model.Client4
 }
 
-func New(s *service.PollService, l *zap.Logger, client *model.Client4, channelID string) *PollHandler {
+func New(s *service.PollService, l *zap.Logger, client *model.Client4) *PollHandler {
 	return &PollHandler{
-		s:         s,
-		l:         l,
-		client:    client,
-		channelID: channelID,
+		s:      s,
+		l:      l,
+		client: client,
 	}
 }
 
@@ -54,7 +52,7 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 		return
 	}
 	if len(args) < 2 {
-		err = h.SendMsg(HelpMessage)
+		err = h.SendMsg(HelpMessage, post.ChannelId)
 		return
 	}
 	h.l.Info("new request for the bot",
@@ -72,13 +70,13 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 			}
 		}
 		respPost := &model.PostEphemeral{UserID: post.UserId}
-		if len(args) <= 3 {
+		if len(args) <= 4 {
 			respPost.Post = &model.Post{ChannelId: post.ChannelId,
 				Message: HelpMessage}
 			_, _, _ = h.client.CreatePostEphemeral(respPost)
 			return
 		}
-		err = h.CreatePoll(createArgs[0], post.UserId, createArgs[1:])
+		err = h.CreatePoll(createArgs[0], post.UserId, post.ChannelId, createArgs[1:])
 		if err != nil {
 			errPost := &model.PostEphemeral{UserID: post.UserId}
 			switch {
@@ -96,13 +94,19 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 					Message: "somthing went wrong"}
 			}
 			_, _, _ = h.client.CreatePostEphemeral(errPost)
+			return
 		}
 	case "vote":
 		respPost := &model.PostEphemeral{UserID: post.UserId}
-		if len(args) <= 3 {
+		h.l.Debug("len args", zap.Int("len(args)", len(args)))
+		if len(args) != 4 {
 			respPost.Post = &model.Post{ChannelId: post.ChannelId,
 				Message: HelpMessage}
-			_, _, _ = h.client.CreatePostEphemeral(respPost)
+			_, _, err = h.client.CreatePostEphemeral(respPost)
+			if err != nil {
+				h.l.Error("error sending message", zap.Error(err))
+				return
+			}
 			return
 		}
 		err = h.Vote(args[2], args[3], post.UserId)
@@ -132,13 +136,13 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 		_, _, _ = h.client.CreatePostEphemeral(respPost)
 	case "result":
 		respPost := &model.PostEphemeral{UserID: post.UserId}
-		if len(args) <= 2 {
+		if len(args) != 3 {
 			respPost.Post = &model.Post{ChannelId: post.ChannelId,
 				Message: HelpMessage}
 			_, _, _ = h.client.CreatePostEphemeral(respPost)
 			return
 		}
-		err = h.GetPollResult(args[2])
+		err = h.GetPollResult(args[2], post.ChannelId)
 		if err != nil {
 			switch {
 			case errors.Is(err, models.ErrPollNotFound):
@@ -149,10 +153,11 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 					Message: "somthing went wrong"}
 			}
 			_, _, _ = h.client.CreatePostEphemeral(respPost)
+			return
 		}
 	case "end":
 		respPost := &model.PostEphemeral{UserID: post.UserId}
-		if len(args) <= 2 {
+		if len(args) != 3 {
 			respPost.Post = &model.Post{ChannelId: post.ChannelId,
 				Message: HelpMessage}
 			_, _, _ = h.client.CreatePostEphemeral(respPost)
@@ -175,13 +180,14 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 					Message: "somthing went wrong"}
 			}
 			_, _, _ = h.client.CreatePostEphemeral(respPost)
+			return
 		}
 		respPost.Post = &model.Post{ChannelId: post.ChannelId,
 			Message: "poll successfully ended"}
 		_, _, _ = h.client.CreatePostEphemeral(respPost)
 	case "delete":
 		respPost := &model.PostEphemeral{UserID: post.UserId}
-		if len(args) <= 2 {
+		if len(args) != 3 {
 			respPost.Post = &model.Post{ChannelId: post.ChannelId,
 				Message: HelpMessage}
 			_, _, _ = h.client.CreatePostEphemeral(respPost)
@@ -201,17 +207,18 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 					Message: "somthing went wrong"}
 			}
 			_, _, _ = h.client.CreatePostEphemeral(respPost)
+			return
 		}
 		respPost.Post = &model.Post{ChannelId: post.ChannelId,
 			Message: "poll successfully deleted"}
 		_, _, _ = h.client.CreatePostEphemeral(respPost)
 	default:
-		err = h.SendMsg(HelpMessage)
+		err = h.SendMsg(HelpMessage, post.ChannelId)
 	}
 
 }
 
-func (h *PollHandler) CreatePoll(question, creatorID string, optionsRaw []string) error {
+func (h *PollHandler) CreatePoll(question, creatorID, channelID string, optionsRaw []string) error {
 	if len(question) < 1 {
 		return models.ErrQuestionIsEmpty
 	}
@@ -235,7 +242,7 @@ func (h *PollHandler) CreatePoll(question, creatorID string, optionsRaw []string
 	for _, option := range options {
 		message += fmt.Sprintf("  [%d] *%s*\n", option.ID, option.Text)
 	}
-	if err = h.SendMsg(message); err != nil {
+	if err = h.SendMsg(message, channelID); err != nil {
 		h.l.Error("failed sending poll message", zap.Error(err))
 		return fmt.Errorf("handler: failed to send message: %w", err)
 	}
@@ -246,7 +253,7 @@ func (h *PollHandler) CreatePoll(question, creatorID string, optionsRaw []string
 	return nil
 }
 
-func (h *PollHandler) GetPollResult(pollID string) error {
+func (h *PollHandler) GetPollResult(pollID, channelID string) error {
 	question, options, votes, err := h.s.GetPollResult(pollID)
 	h.l.Debug("data for getting poll result",
 		zap.String("poll_id", pollID),
@@ -268,7 +275,7 @@ func (h *PollHandler) GetPollResult(pollID string) error {
 		message += fmt.Sprintf("  [%d] votes: **%d** (*%s*)\n",
 			option.ID, votes[strconv.Itoa(option.ID)], option.Text)
 	}
-	if err = h.SendMsg(message); err != nil {
+	if err = h.SendMsg(message, channelID); err != nil {
 		h.l.Error("error sending message", zap.Error(err))
 		return err
 	}
@@ -330,15 +337,18 @@ func (h *PollHandler) EndPoll(pollID, userID string) error {
 			h.l.Warn("user is not owner of poll",
 				zap.String("poll_id", pollID),
 				zap.String("user_id", userID))
+			return err
 		case errors.Is(err, models.ErrPollAlreadyEnded):
 			h.l.Warn("poll already ended",
 				zap.String("poll_id", pollID),
 				zap.String("user_id", userID))
+			return err
 		default:
 			h.l.Error("failed to end poll",
 				zap.String("poll_id", pollID),
 				zap.String("user_id", userID),
 				zap.Error(err))
+			return fmt.Errorf("handler: failed to end poll: %w", err)
 		}
 	}
 	h.l.Info("successfully ended poll",
@@ -361,11 +371,13 @@ func (h *PollHandler) DeletePoll(pollID, userID string) error {
 			h.l.Warn("user is not owner of poll",
 				zap.String("poll_id", pollID),
 				zap.String("user_id", userID))
+			return err
 		default:
 			h.l.Error("failed to delete poll",
 				zap.String("poll_id", pollID),
 				zap.String("user_id", userID),
 				zap.Error(err))
+			return fmt.Errorf("handler: failed to delete poll: %w", err)
 		}
 	}
 	h.l.Info("successfully deleted poll",
@@ -374,9 +386,9 @@ func (h *PollHandler) DeletePoll(pollID, userID string) error {
 	return nil
 }
 
-func (h *PollHandler) SendMsg(message string) error {
+func (h *PollHandler) SendMsg(message, channelID string) error {
 	post := &model.Post{
-		ChannelId: h.channelID,
+		ChannelId: channelID,
 		Message:   message,
 	}
 	req, resp, err := h.client.CreatePost(post)

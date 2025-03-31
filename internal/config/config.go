@@ -9,7 +9,6 @@ import (
 type Config struct {
 	RestPort  string           `yaml:"REST_PORT"  env:"REST_PORT" env-default:"8080"`
 	BotToken  string           `yaml:"BOT_TOKEN"  env:"BOT_TOKEN"`
-	ChannelID string           `yaml:"CHANNEL_ID" env:"CHANNEL_ID"`
 	MmURL     string           `yaml:"MM_URL"     env:"MM_URL"`
 	MmWsURL   string           `yaml:"MM_WS_URL"  env:"MM_WS_URL"`
 	LogLevel  string           `yaml:"LOG_LEVEL"  env:"LOG_LEVEL" env-default:"debug"`
