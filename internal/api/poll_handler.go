@@ -59,7 +59,7 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 	}
 	h.l.Info("new request for the bot",
 		zap.String("command", args[0]),
-		zap.String("subcommand", args[1]),
+		zap.String("action", args[1]),
 		zap.String("user_id", post.UserId),
 		zap.String("channel_id", post.ChannelId),
 		zap.String("message", post.Message))
@@ -71,8 +71,12 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 				createArgs = append(createArgs, strings.Trim(val, "\""))
 			}
 		}
-		if len(createArgs) < 2 {
-			createArgs = append(createArgs, "hack")
+		respPost := &model.PostEphemeral{UserID: post.UserId}
+		if len(args) <= 3 {
+			respPost.Post = &model.Post{ChannelId: post.ChannelId,
+				Message: HelpMessage}
+			_, _, _ = h.client.CreatePostEphemeral(respPost)
+			return
 		}
 		err = h.CreatePoll(createArgs[0], post.UserId, createArgs[1:])
 		if err != nil {
@@ -90,13 +94,18 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 			default:
 				errPost.Post = &model.Post{ChannelId: post.ChannelId,
 					Message: "somthing went wrong"}
-				h.l.Error("failed to create poll", zap.Error(err))
 			}
 			_, _, _ = h.client.CreatePostEphemeral(errPost)
 		}
 	case "vote":
-		err = h.Vote(args[2], args[3], post.UserId)
 		respPost := &model.PostEphemeral{UserID: post.UserId}
+		if len(args) <= 3 {
+			respPost.Post = &model.Post{ChannelId: post.ChannelId,
+				Message: HelpMessage}
+			_, _, _ = h.client.CreatePostEphemeral(respPost)
+			return
+		}
+		err = h.Vote(args[2], args[3], post.UserId)
 		if err != nil {
 			switch {
 			case errors.Is(err, models.ErrPollNotFound):
@@ -108,10 +117,12 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 			case errors.Is(err, models.ErrVoteAlreadyExists):
 				respPost.Post = &model.Post{ChannelId: post.ChannelId,
 					Message: err.Error()}
+			case errors.Is(err, models.ErrPollIsEnd):
+				respPost.Post = &model.Post{ChannelId: post.ChannelId,
+					Message: fmt.Sprintf("poll with id: %s is ended", args[2])}
 			default:
 				respPost.Post = &model.Post{ChannelId: post.ChannelId,
 					Message: "somthing went wrong"}
-				h.l.Error("failed to vote", zap.Error(err))
 			}
 			_, _, _ = h.client.CreatePostEphemeral(respPost)
 			return
@@ -120,24 +131,80 @@ func HandleMessage(h *PollHandler, event *model.WebSocketEvent, botID string) {
 			Message: "your vote successfully written"}
 		_, _, _ = h.client.CreatePostEphemeral(respPost)
 	case "result":
+		respPost := &model.PostEphemeral{UserID: post.UserId}
+		if len(args) <= 2 {
+			respPost.Post = &model.Post{ChannelId: post.ChannelId,
+				Message: HelpMessage}
+			_, _, _ = h.client.CreatePostEphemeral(respPost)
+			return
+		}
 		err = h.GetPollResult(args[2])
 		if err != nil {
-			errPost := &model.PostEphemeral{UserID: post.UserId}
 			switch {
 			case errors.Is(err, models.ErrPollNotFound):
-				errPost.Post = &model.Post{ChannelId: post.ChannelId,
+				respPost.Post = &model.Post{ChannelId: post.ChannelId,
 					Message: fmt.Sprintf("not found poll with id: %s", args[2])}
 			default:
-				errPost.Post = &model.Post{ChannelId: post.ChannelId,
+				respPost.Post = &model.Post{ChannelId: post.ChannelId,
 					Message: "somthing went wrong"}
-				h.l.Error("failed to get poll", zap.Error(err))
 			}
-			_, _, _ = h.client.CreatePostEphemeral(errPost)
+			_, _, _ = h.client.CreatePostEphemeral(respPost)
 		}
 	case "end":
-		err = h.EndPoll(args[2])
+		respPost := &model.PostEphemeral{UserID: post.UserId}
+		if len(args) <= 2 {
+			respPost.Post = &model.Post{ChannelId: post.ChannelId,
+				Message: HelpMessage}
+			_, _, _ = h.client.CreatePostEphemeral(respPost)
+			return
+		}
+		err = h.EndPoll(args[2], post.UserId)
+		if err != nil {
+			switch {
+			case errors.Is(err, models.ErrPollNotFound):
+				respPost.Post = &model.Post{ChannelId: post.ChannelId,
+					Message: fmt.Sprintf("not found poll with id: %s", args[2])}
+			case errors.Is(err, models.ErrUserNotOwner):
+				respPost.Post = &model.Post{ChannelId: post.ChannelId,
+					Message: err.Error()}
+			case errors.Is(err, models.ErrPollAlreadyEnded):
+				respPost.Post = &model.Post{ChannelId: post.ChannelId,
+					Message: err.Error()}
+			default:
+				respPost.Post = &model.Post{ChannelId: post.ChannelId,
+					Message: "somthing went wrong"}
+			}
+			_, _, _ = h.client.CreatePostEphemeral(respPost)
+		}
+		respPost.Post = &model.Post{ChannelId: post.ChannelId,
+			Message: "poll successfully ended"}
+		_, _, _ = h.client.CreatePostEphemeral(respPost)
 	case "delete":
-		err = h.DeletePoll(args[2])
+		respPost := &model.PostEphemeral{UserID: post.UserId}
+		if len(args) <= 2 {
+			respPost.Post = &model.Post{ChannelId: post.ChannelId,
+				Message: HelpMessage}
+			_, _, _ = h.client.CreatePostEphemeral(respPost)
+			return
+		}
+		err = h.DeletePoll(args[2], post.UserId)
+		if err != nil {
+			switch {
+			case errors.Is(err, models.ErrPollNotFound):
+				respPost.Post = &model.Post{ChannelId: post.ChannelId,
+					Message: fmt.Sprintf("not found poll with id: %s", args[2])}
+			case errors.Is(err, models.ErrUserNotOwner):
+				respPost.Post = &model.Post{ChannelId: post.ChannelId,
+					Message: err.Error()}
+			default:
+				respPost.Post = &model.Post{ChannelId: post.ChannelId,
+					Message: "somthing went wrong"}
+			}
+			_, _, _ = h.client.CreatePostEphemeral(respPost)
+		}
+		respPost.Post = &model.Post{ChannelId: post.ChannelId,
+			Message: "poll successfully deleted"}
+		_, _, _ = h.client.CreatePostEphemeral(respPost)
 	default:
 		err = h.SendMsg(HelpMessage)
 	}
@@ -191,12 +258,15 @@ func (h *PollHandler) GetPollResult(pollID string) error {
 			h.l.Warn("poll not found", zap.String("poll_id", pollID))
 			return err
 		}
-		h.l.Error("failed getting poll result", zap.String("poll_id", pollID), zap.Error(err))
+		h.l.Error("failed getting poll result",
+			zap.String("poll_id", pollID),
+			zap.Error(err))
 		return fmt.Errorf("handler: failed to get poll result: %w", err)
 	}
 	message := fmt.Sprintf("**Question**: %s\n", question)
 	for _, option := range options {
-		message += fmt.Sprintf("  [%d] votes: **%d** (*%s*)\n", option.ID, votes[strconv.Itoa(option.ID)], option.Text)
+		message += fmt.Sprintf("  [%d] votes: **%d** (*%s*)\n",
+			option.ID, votes[strconv.Itoa(option.ID)], option.Text)
 	}
 	if err = h.SendMsg(message); err != nil {
 		h.l.Error("error sending message", zap.Error(err))
@@ -208,32 +278,35 @@ func (h *PollHandler) GetPollResult(pollID string) error {
 }
 
 func (h *PollHandler) Vote(pollID, choiceID, userID string) error {
-	// todo check if the user has already voted
-	// todo add vote to vote space
 	h.l.Debug("data for voting",
 		zap.String("poll_id", pollID),
 		zap.String("choice_id", choiceID))
 	err := h.s.Vote(pollID, choiceID, userID)
 	if err != nil {
-		if errors.Is(err, models.ErrPollNotFound) {
+		switch {
+		case errors.Is(err, models.ErrPollNotFound):
 			h.l.Warn("poll not found", zap.String("poll_id", pollID))
 			return err
-		}
-		if errors.Is(err, models.ErrOptionIsNotFound) {
+		case errors.Is(err, models.ErrOptionIsNotFound):
 			h.l.Warn("option not found", zap.String("choice_id", choiceID))
 			return err
-		}
-		if errors.Is(err, models.ErrVoteAlreadyExists) {
+		case errors.Is(err, models.ErrVoteAlreadyExists):
 			h.l.Warn("vote already exists",
 				zap.String("poll_id", pollID),
 				zap.String("choice_id", choiceID))
 			return err
+		case errors.Is(err, models.ErrPollIsEnd):
+			h.l.Warn("poll is ended",
+				zap.String("poll_id", pollID),
+				zap.String("choice_id", choiceID))
+			return err
+		default:
+			h.l.Error("failed to vote",
+				zap.String("poll_id", pollID),
+				zap.String("choice_id", choiceID),
+				zap.Error(err))
+			return fmt.Errorf("handler: failed to vote: %w", err)
 		}
-		h.l.Error("failed to vote",
-			zap.String("poll_id", pollID),
-			zap.String("choice_id", choiceID),
-			zap.Error(err))
-		return fmt.Errorf("handler: failed to vote: %w", err)
 	}
 
 	h.l.Info("voted successfully",
@@ -243,11 +316,61 @@ func (h *PollHandler) Vote(pollID, choiceID, userID string) error {
 	return nil
 }
 
-func (h *PollHandler) EndPoll(pollID string) error {
+func (h *PollHandler) EndPoll(pollID, userID string) error {
+	h.l.Debug("data for ending poll",
+		zap.String("poll_id", pollID),
+		zap.String("user_id", userID))
+	err := h.s.EndPoll(pollID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, models.ErrPollNotFound):
+			h.l.Warn("poll not found", zap.String("poll_id", pollID))
+			return err
+		case errors.Is(err, models.ErrUserNotOwner):
+			h.l.Warn("user is not owner of poll",
+				zap.String("poll_id", pollID),
+				zap.String("user_id", userID))
+		case errors.Is(err, models.ErrPollAlreadyEnded):
+			h.l.Warn("poll already ended",
+				zap.String("poll_id", pollID),
+				zap.String("user_id", userID))
+		default:
+			h.l.Error("failed to end poll",
+				zap.String("poll_id", pollID),
+				zap.String("user_id", userID),
+				zap.Error(err))
+		}
+	}
+	h.l.Info("successfully ended poll",
+		zap.String("poll_id", pollID),
+		zap.String("user_id", userID))
 	return nil
 }
 
-func (h *PollHandler) DeletePoll(pollID string) error {
+func (h *PollHandler) DeletePoll(pollID, userID string) error {
+	h.l.Debug("data for deleting poll",
+		zap.String("poll_id", pollID),
+		zap.String("user_id", userID))
+	err := h.s.DeletePoll(pollID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, models.ErrPollNotFound):
+			h.l.Warn("poll not found", zap.String("poll_id", pollID))
+			return err
+		case errors.Is(err, models.ErrUserNotOwner):
+			h.l.Warn("user is not owner of poll",
+				zap.String("poll_id", pollID),
+				zap.String("user_id", userID))
+		default:
+			h.l.Error("failed to delete poll",
+				zap.String("poll_id", pollID),
+				zap.String("user_id", userID),
+				zap.Error(err))
+		}
+	}
+	h.l.Info("successfully deleted poll",
+		zap.String("poll_id", pollID),
+		zap.String("user_id", userID))
 	return nil
 }
 

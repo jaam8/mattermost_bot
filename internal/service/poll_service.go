@@ -59,11 +59,13 @@ func (s *PollService) Vote(pollID, choiceID, userID string) error {
 	if err != nil {
 		switch {
 		case errors.Is(err, models.ErrPollNotFound):
-			return models.ErrPollNotFound
+			return err
 		case errors.Is(err, models.ErrVoteAlreadyExists):
-			return models.ErrVoteAlreadyExists
+			return err
 		case errors.Is(err, models.ErrOptionIsNotFound):
-			return models.ErrOptionIsNotFound
+			return err
+		case errors.Is(err, models.ErrPollIsEnd):
+			return err
 		default:
 			s.l.Error("failed to vote", zap.Error(err))
 			return fmt.Errorf("service: failed to vote: %w", err)
@@ -77,9 +79,9 @@ func (s *PollService) GetPollResult(pollID string) (string, []models.Option, map
 	if err != nil {
 		switch {
 		case errors.Is(err, models.ErrPollNotFound):
-			return "", nil, nil, models.ErrPollNotFound
+			return "", nil, nil, err
 		case errors.Is(err, models.ErrFailedToProcessData):
-			return "", nil, nil, models.ErrFailedToProcessData
+			return "", nil, nil, err
 		default:
 			s.l.Error("error getting poll result", zap.Error(err))
 			return "", nil, nil, fmt.Errorf("service: failed to get poll result: %w", err)
@@ -87,4 +89,38 @@ func (s *PollService) GetPollResult(pollID string) (string, []models.Option, map
 	}
 
 	return poll.Question, poll.Options, poll.Votes, nil
+}
+
+func (s *PollService) DeletePoll(pollID, userID string) error {
+	err := s.r.DeletePoll(pollID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, models.ErrPollNotFound):
+			return err
+		case errors.Is(err, models.ErrUserNotOwner):
+			return err
+		default:
+			s.l.Error("failed to delete poll", zap.Error(err))
+			return fmt.Errorf("service: failed to delete poll: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *PollService) EndPoll(pollID, userID string) error {
+	err := s.r.EndPoll(pollID, userID)
+	if err != nil {
+		switch {
+		case errors.Is(err, models.ErrPollNotFound):
+			return err
+		case errors.Is(err, models.ErrUserNotOwner):
+			return err
+		case errors.Is(err, models.ErrPollAlreadyEnded):
+			return err
+		default:
+			s.l.Error("failed to end poll", zap.Error(err))
+			return fmt.Errorf("service: failed to end poll: %w", err)
+		}
+	}
+	return nil
 }

@@ -43,7 +43,7 @@ func (r *PollRepository) CreatePoll(poll *models.Poll) (string, []models.Option,
 	r.l.Debug("tarantool response",
 		zap.Uint32("status_code", resp.Code),
 		zap.Any("resp", resp.Data),
-		zap.Any("error", resp.Error))
+		zap.String("error", resp.Error))
 
 	if err != nil {
 		r.l.Debug("error inserting poll", zap.Error(err))
@@ -53,20 +53,9 @@ func (r *PollRepository) CreatePoll(poll *models.Poll) (string, []models.Option,
 }
 
 func (r *PollRepository) Vote(pollID, choiceID, userID string) error {
-	updateResp, err := r.db.Select("polls", "primary", 0, 1, tarantool.IterEq, []interface{}{pollID})
+	pollTuple, err := r.GetPoll(pollID)
 	if err != nil {
-		r.l.Debug("failed to select poll", zap.Error(err))
-		return fmt.Errorf("repository: database select error: %w", err)
-	}
-	if len(updateResp.Data) == 0 {
-		r.l.Debug("poll not found", zap.String("poll_id", pollID))
-		return models.ErrPollNotFound
-	}
-
-	pollTuple, ok := updateResp.Data[0].([]interface{})
-	if !ok {
-		r.l.Debug("unexpected data type", zap.Any("data", updateResp.Data))
-		return models.ErrFailedToProcessData
+		return err
 	}
 	votesField, ok := pollTuple[3].(string)
 	if !ok {
@@ -101,10 +90,10 @@ func (r *PollRepository) Vote(pollID, choiceID, userID string) error {
 	}
 	updateVotes := []interface{}{[]interface{}{"=", 3, string(updatedVotesJSON)}}
 
-	updateResp, err = r.db.Update("polls", "primary", []interface{}{pollID}, updateVotes)
+	resp, err := r.db.Update("polls", "primary", []interface{}{pollID}, updateVotes)
 	r.l.Debug("tarantool response",
-		zap.Uint32("status_code", updateResp.Code),
-		zap.Any("updateResp", updateResp.Data))
+		zap.Uint32("status_code", resp.Code),
+		zap.Any("resp", resp.Data))
 	if err != nil {
 		r.l.Debug("failed to update votes", zap.Error(err))
 		return fmt.Errorf("repository: database update error: %w", err)
@@ -147,32 +136,18 @@ func (r *PollRepository) InsertVote(pollID, userID, choiceID string) error {
 }
 
 func (r *PollRepository) GetPollResult(pollID string) (*models.Poll, error) {
-	resp, err := r.db.Select(
-		"polls",
-		"primary",
-		0,
-		1,
-		tarantool.IterEq,
-		[]interface{}{pollID},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("repository: database select error: %w", err)
-	}
-	if len(resp.Data) == 0 {
-		return nil, models.ErrPollNotFound
-	}
-	r.l.Debug("tarantool response", zap.Any("result", resp))
+	pollTuple, err := r.GetPoll(pollID)
 	poll := &models.Poll{}
-	data, ok := resp.Data[0].([]interface{})
-	if !ok {
-		r.l.Debug("unexpected data type", zap.Any("data", resp.Data))
-		return nil, fmt.Errorf("repository: unexpected data type: %w", models.ErrFailedToProcessData)
+	if err != nil {
+		return poll, err
 	}
-	poll.ID = data[0].(string)
-	poll.Question = data[1].(string)
-	optionsRaw, ok := data[2].([]interface{})
+	r.l.Debug("tarantool response", zap.Any("result", pollTuple))
+	poll.ID = pollTuple[0].(string)
+	poll.Question = pollTuple[1].(string)
+	optionsRaw, ok := pollTuple[2].([]interface{})
 	if !ok {
-		return nil, fmt.Errorf("repository: unexpected type for poll options: %w", models.ErrFailedToProcessData)
+		return nil, fmt.Errorf("repository: unexpected type for pollTuple options: %w",
+			models.ErrFailedToProcessData)
 	}
 	var options []models.Option
 	for _, opt := range optionsRaw {
@@ -192,14 +167,14 @@ func (r *PollRepository) GetPollResult(pollID string) (*models.Poll, error) {
 	r.l.Debug("options", zap.Any("options", options))
 	poll.Options = options
 	poll.Votes = make(map[string]int)
-	err = json.Unmarshal([]byte(data[3].(string)), &poll.Votes)
+	err = json.Unmarshal([]byte(pollTuple[3].(string)), &poll.Votes)
 	if err != nil {
 		r.l.Debug("failed to unmarshal votes", zap.Error(err))
 		return nil, fmt.Errorf("repository: failed to unmarshal votes: %w", err)
 	}
-	poll.CreatorID = data[4].(string)
-	poll.IsActive = data[5].(bool)
-	r.l.Debug("poll result", zap.Any("poll", poll))
+	poll.CreatorID = pollTuple[4].(string)
+	poll.IsActive = pollTuple[5].(bool)
+	r.l.Debug("poll data from tarantool", zap.Any("poll", poll))
 	return poll, nil
 }
 
@@ -219,4 +194,75 @@ func convertKeys(i interface{}) interface{} {
 	default:
 		return i
 	}
+}
+
+func (r *PollRepository) DeletePoll(pollID, userID string) error {
+	pollTuple, err := r.GetPoll(pollID)
+	if err != nil {
+		return err
+	}
+	if pollTuple[4].(string) != userID {
+		r.l.Debug("user is not the owner of the poll", zap.String("user_id", userID))
+		return models.ErrUserNotOwner
+	}
+	resp, err := r.db.Delete("polls", "primary", []interface{}{pollID})
+	if err != nil {
+		r.l.Debug("failed to delete poll", zap.Error(err))
+		return fmt.Errorf("repository: database delete error: %w", err)
+	}
+	r.l.Debug("tarantool response",
+		zap.Uint32("status_code", resp.Code),
+		zap.Any("resp", resp.Data),
+		zap.String("error", resp.Error))
+	return nil
+}
+
+func (r *PollRepository) EndPoll(pollID, userID string) error {
+	pollTuple, err := r.GetPoll(pollID)
+	if err != nil {
+		return err
+	}
+	if isActive, _ := pollTuple[5].(bool); !isActive {
+		r.l.Debug("poll is not active", zap.String("poll_id", pollID))
+		return models.ErrPollAlreadyEnded
+	}
+	if pollTuple[4].(string) != userID {
+		r.l.Debug("user is not the owner of the poll", zap.String("user_id", userID))
+		return models.ErrUserNotOwner
+	}
+	resp, err := r.db.Update("polls", "primary",
+		[]interface{}{pollID},
+		[]interface{}{[]interface{}{"=", 5, false}})
+	if err != nil {
+		r.l.Debug("failed to update poll", zap.Error(err))
+		return fmt.Errorf("repository: database update error: %w", err)
+	}
+	r.l.Debug("tarantool response",
+		zap.Uint32("status_code", resp.Code),
+		zap.Any("resp", resp.Data),
+		zap.String("error", resp.Error))
+	return nil
+}
+
+func (r *PollRepository) GetPoll(pollID string) ([]interface{}, error) {
+	existencePoll, err := r.db.Select("polls", "primary", 0, 1, tarantool.IterEq, []interface{}{pollID})
+	if err != nil {
+		r.l.Debug("failed to select poll", zap.Error(err))
+		return []interface{}{}, fmt.Errorf("repository: database select error: %w", err)
+	}
+	r.l.Debug("tarantool response",
+		zap.Uint32("status_code", existencePoll.Code),
+		zap.Any("resp", existencePoll.Data),
+		zap.String("error", existencePoll.Error))
+
+	if len(existencePoll.Data) == 0 {
+		r.l.Debug("poll not found", zap.String("poll_id", pollID))
+		return []interface{}{}, models.ErrPollNotFound
+	}
+	pollTuple, ok := existencePoll.Data[0].([]interface{})
+	if !ok {
+		r.l.Debug("unexpected data type", zap.Any("data", existencePoll.Data))
+		return []interface{}{}, models.ErrFailedToProcessData
+	}
+	return pollTuple, nil
 }

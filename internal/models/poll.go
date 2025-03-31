@@ -11,6 +11,8 @@ var (
 	ErrQuestionIsEmpty     = errors.New("question is empty")
 	ErrOptionIsNotFound    = errors.New("option is not found")
 	ErrVoteAlreadyExists   = errors.New("your vote already written")
+	ErrPollAlreadyEnded    = errors.New("poll already ended")
+	ErrUserNotOwner        = errors.New("you are not the owner of this poll")
 )
 
 type Poll struct {
